@@ -8,6 +8,7 @@ struct IdfmCarouselSlot {
   const char* line_ref;
   const char* line_code;
   const char* label;
+  bool prefer_theoretical;
 };
 
 extern const IdfmCarouselSlot kIdfmCarouselSlots[];

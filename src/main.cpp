@@ -177,7 +177,7 @@ bool update_time_text()
   return false;
 }
 
-void set_bus_from_result(const IdfmResult& result)
+void set_bus_from_result(const IdfmResult& result, bool prefer_theoretical)
 {
   if (result.ok && result.line[0] != '\0') {
     copy_text(g_ui.bus_line, sizeof(g_ui.bus_line), result.line);
@@ -196,6 +196,7 @@ void set_bus_from_result(const IdfmResult& result)
     g_ui.bus_eta_minutes = -1;
   }
   g_ui.bus_state = result.ok ? BusState::Ready : BusState::Error;
+  g_ui.bus_theoretical = prefer_theoretical;
 }
 
 enum class IdfmUiPhase : uint8_t { InitFirst, PrefetchAhead, HoldShowCurrent };
@@ -210,23 +211,82 @@ struct IdfmSlotView {
   const char* line_ref;
   const char* line_code;
   const char* label;
+  bool prefer_theoretical;
 };
+
+static bool time_is_between_7_and_23()
+{
+  time_t now = time(nullptr);
+  struct tm local_time;
+  localtime_r(&now, &local_time);
+  const int hour = local_time.tm_hour;
+  return hour >= 7 && hour < 23;
+}
+
+static bool slot_is_hidden_now(const IdfmCarouselSlot& slot)
+{
+  if (slot.label == nullptr) {
+    return false;
+  }
+  if (std::strcmp(slot.label, "N141") != 0) {
+    return false;
+  }
+  return time_is_between_7_and_23();
+}
 
 static size_t carousel_mod()
 {
-  return kIdfmCarouselCount > 0 ? kIdfmCarouselCount : 1u;
+  if (kIdfmCarouselCount == 0) {
+    return 1u;
+  }
+  size_t visible = 0;
+  for (size_t i = 0; i < kIdfmCarouselCount; ++i) {
+    if (!slot_is_hidden_now(kIdfmCarouselSlots[i])) {
+      visible++;
+    }
+  }
+  return visible > 0 ? visible : 1u;
 }
 
 static IdfmSlotView slot_at(uint8_t idx)
 {
   if (kIdfmCarouselCount > 0) {
-    const IdfmCarouselSlot& s = kIdfmCarouselSlots[idx % kIdfmCarouselCount];
+    const size_t visible_count = carousel_mod();
+    if (visible_count == 0) {
+      const IdfmCarouselSlot& s = kIdfmCarouselSlots[0];
+      return {s.monitoring_ref,
+              s.line_ref,
+              s.line_code,
+              s.label != nullptr ? s.label : IDFM_LINE_LABEL};
+    }
+    idx %= (uint8_t)visible_count;
+    size_t visible_idx = 0;
+    for (size_t i = 0; i < kIdfmCarouselCount; ++i) {
+      const IdfmCarouselSlot& s = kIdfmCarouselSlots[i];
+      if (slot_is_hidden_now(s)) {
+        continue;
+      }
+      if (visible_idx == idx) {
+        return {s.monitoring_ref,
+                s.line_ref,
+                s.line_code,
+                s.label != nullptr ? s.label : IDFM_LINE_LABEL,
+                s.prefer_theoretical};
+      }
+      visible_idx++;
+    }
+    const IdfmCarouselSlot& s = kIdfmCarouselSlots[0];
     return {s.monitoring_ref,
             s.line_ref,
             s.line_code,
-            s.label != nullptr ? s.label : IDFM_LINE_LABEL};
+            s.label != nullptr ? s.label : IDFM_LINE_LABEL,
+            s.prefer_theoretical};
   }
-  return {IDFM_MONITORING_REF, IDFM_LINE_REF, IDFM_LINE_CODE, IDFM_LINE_LABEL};
+  return {IDFM_MONITORING_REF,
+          IDFM_LINE_REF,
+          IDFM_LINE_CODE,
+          IDFM_LINE_LABEL,
+          IDFM_PREFER_THEORETICAL != 0};
 }
 
 static uint8_t prefetch_slot_index()
@@ -241,15 +301,16 @@ static void apply_slot_line_idle_bus_ui(const IdfmSlotView& slot)
   } else {
     copy_text(g_ui.bus_line, sizeof(g_ui.bus_line), IDFM_LINE_LABEL);
   }
-  copy_text(g_ui.bus_text, sizeof(g_ui.bus_text), "--");
+  copy_text(g_ui.bus_text, sizeof(g_ui.bus_text), "+1h");
   g_ui.bus_eta_minutes = -1;
   g_ui.bus_state = BusState::Ready;
+  g_ui.bus_theoretical = slot.prefer_theoretical;
 }
 
 static void set_ui_from_result_for_slot(uint8_t slot_idx, const IdfmResult& r)
 {
-  set_bus_from_result(r);
   const IdfmSlotView s = slot_at(slot_idx);
+  set_bus_from_result(r, s.prefer_theoretical);
   if (s.label != nullptr && s.label[0] != '\0') {
     copy_text(g_ui.bus_line, sizeof(g_ui.bus_line), s.label);
   }
@@ -297,6 +358,7 @@ static void poll_idfm_flow(uint32_t now_ms)
                                                 s0.line_ref,
                                                 s0.line_code,
                                                 line_label,
+                                                s0.prefer_theoretical,
                                                 r);
       set_ui_from_result_for_slot(g_show_idx, r);
       (void)ok;
@@ -332,6 +394,7 @@ static void poll_idfm_flow(uint32_t now_ms)
                                                 sn.line_ref,
                                                 sn.line_code,
                                                 line_label,
+                                                sn.prefer_theoretical,
                                                 g_prefetch);
       (void)ok;
       Serial.printf("[IDFM] prefetch next=%u (still showing slot=%u) ok=%d http=%d\n",
@@ -427,7 +490,12 @@ void ensure_mqtt(uint32_t now_ms)
   }
   g_last_mqtt_attempt_ms = now_ms;
 
-  Serial.printf("MQTT connecting %s:%d...\n", MQTT_HOST, MQTT_PORT);
+  if (MQTT_HOST[0] == '\0') {
+    Serial.println(F("MQTT host is empty; skipping MQTT connect"));
+    g_ui.mqtt_connected = false;
+    return;
+  }
+  Serial.printf("MQTT connecting '%s':%d...\n", MQTT_HOST, MQTT_PORT);
   bool connected = false;
   if (has_text(MQTT_USER)) {
     connected = g_mqtt.connect(MQTT_CLIENT_ID, MQTT_USER, MQTT_PASSWORD);
@@ -485,7 +553,7 @@ void setup()
                 DISPLAY_TOTAL_HEIGHT);
 
   copy_text(g_ui.bus_line, sizeof(g_ui.bus_line), IDFM_LINE_LABEL);
-  copy_text(g_ui.bus_text, sizeof(g_ui.bus_text), "--");
+  copy_text(g_ui.bus_text, sizeof(g_ui.bus_text), "+1h");
   g_ui.bus_eta_minutes = -1;
 
   if (!g_hub.begin(128)) {
@@ -502,7 +570,11 @@ void setup()
   apply_slot_line_idle_bus_ui(slot_at(g_show_idx));
   s_ui_dirty = true;
 
-  g_mqtt.setServer(MQTT_HOST, MQTT_PORT);
+  if (MQTT_HOST[0] != '\0') {
+    g_mqtt.setServer(MQTT_HOST, MQTT_PORT);
+  } else {
+    Serial.println(F("MQTT host empty at startup; MQTT disabled"));
+  }
   g_mqtt.setCallback(mqtt_callback);
 }
 
@@ -538,16 +610,33 @@ void loop()
     const bool anim_ended = s_prev_notify_anim && !notify_animating;
     s_prev_notify_anim = notify_animating;
 
-    const bool need_draw = notify_animating || s_ui_dirty || anim_ended;
+    const bool blink_active = std::strcmp(g_ui.bus_text, "PCH") == 0 ||
+                              std::strcmp(g_ui.bus_text, "QUAI") == 0;
+    const bool need_draw = notify_animating || s_ui_dirty || anim_ended || blink_active;
     const uint32_t ui_period =
-        notify_animating ? (uint32_t)UI_REFRESH_MS
-                         : (anim_ended ? 0u : (uint32_t)UI_IDLE_REFRESH_MS);
+        (notify_animating || blink_active)
+            ? (uint32_t)UI_REFRESH_MS
+            : (anim_ended ? 0u : (uint32_t)UI_IDLE_REFRESH_MS);
     if (need_draw &&
         (g_last_ui_ms == 0 || (now_ms - g_last_ui_ms) >= ui_period)) {
       g_last_ui_ms = now_ms;
       g_hub.draw_ui(g_ui);
       if (!notify_animating) {
         s_ui_dirty = false;
+      }
+    }
+
+    // Adjust brightness based on time: dim from 21:30 to 7:00
+    struct tm timeinfo {};
+    if (getLocalTime(&timeinfo, 0)) {
+      int hour = timeinfo.tm_hour;
+      int min = timeinfo.tm_min;
+      bool is_dim_time = (hour > 21 || (hour == 21 && min >= 30)) || (hour < 7);
+      uint8_t brightness = is_dim_time ? 32 : 255;
+      static uint8_t last_brightness = 255;
+      if (brightness != last_brightness) {
+        g_hub.set_brightness8(brightness);
+        last_brightness = brightness;
       }
     }
   }

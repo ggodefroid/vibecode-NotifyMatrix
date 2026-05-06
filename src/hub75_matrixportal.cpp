@@ -150,10 +150,11 @@ void Hub75MatrixPortal::draw_ui(const UiModel& model)
   MatrixPanel_I2S_DMA* d = panel_ptr(panel_);
   const uint16_t black = d->color565(0, 0, 0);
   const uint16_t amber = d->color565(255, 150, 0);
-  const uint16_t sep_white = d->color565(255, 255, 255);
+  const uint16_t sep_blue = d->color565(40, 120, 255);
   const uint16_t notify_bg = d->color565(0, 110, 28);
   const uint16_t white = d->color565(255, 255, 255);
   const uint16_t eta_blue_dim = d->color565(40, 120, 255);
+  const uint16_t eta_green = d->color565(0, 220, 100);
   const uint16_t eta_orange = d->color565(255, 110, 0);
   const uint16_t eta_red = d->color565(255, 32, 28);
   const uint16_t warn = d->color565(255, 200, 0);
@@ -190,15 +191,21 @@ void Hub75MatrixPortal::draw_ui(const UiModel& model)
     const int16_t time_ty_nom =
         (int16_t)((full_h - (int16_t)tht) / 2) + y_shift;
     const int16_t time_ty = time_ty_nom - S;
-    const int16_t tcx = (int16_t)(tx0 + tw - (int16_t)twd - 1);
+    const int16_t tcx = (int16_t)(tx0 + tw - (int16_t)twd - 2);
     d->setCursor(tcx, time_ty);
     d->print(model.time_text);
   }
 
+  const int16_t vline_y = y_shift > 0 ? y_shift - 1 : 0;
+  const int16_t vline_h = (content_h - vline_y) > 0 ? (content_h - vline_y) : 1;
+  d->drawFastVLine(bx0 - 2,
+                   vline_y,
+                   vline_h,
+                   sep_blue);
   d->drawFastVLine(bx0 - 1,
-                   y_shift,
-                   (content_h - y_shift) > 0 ? (content_h - y_shift) : 1,
-                   sep_white);
+                   vline_y,
+                   vline_h,
+                   sep_blue);
 
   if (content_h > 6) {
     d->setTextSize(1);
@@ -211,15 +218,16 @@ void Hub75MatrixPortal::draw_ui(const UiModel& model)
     (void)lx1;
     (void)ly1;
     const int16_t lcx = (int16_t)(bx0 + (bw - (int16_t)lw) / 2);
-    const int16_t line_y = bus_line_nom - S + y_shift;
+    const int16_t line_y = bus_line_nom - S + y_shift - 1;
     if (line_y + (int16_t)lh <= content_h && line_y >= -2) {
       d->setCursor(lcx, line_y);
       print_limited(d, model.bus_line, 8);
     }
 
     const int16_t split_draw = split_nom - S + y_shift;
-    if (split_draw >= 1 && split_draw < content_h - 2) {
-      d->drawFastHLine(bx0, split_draw, bw, sep_white);
+    if (split_draw >= 1 && split_draw < content_h) {
+      d->drawFastHLine(bx0, split_draw - 1, bw, sep_blue);
+      d->drawFastHLine(bx0, split_draw, bw, sep_blue);
     }
 
     uint16_t eta_color = amber;
@@ -230,7 +238,7 @@ void Hub75MatrixPortal::draw_ui(const UiModel& model)
     } else if (model.bus_state == BusState::Ready && model.bus_eta_minutes >= 0) {
       const int m = model.bus_eta_minutes;
       if (m > 10) {
-        eta_color = eta_blue_dim;
+        eta_color = eta_green;
       } else if (m >= 7) {
         eta_color = eta_orange;
       } else {
@@ -240,7 +248,10 @@ void Hub75MatrixPortal::draw_ui(const UiModel& model)
       eta_color = eta_blue_dim;
     }
 
-    d->setTextColor(eta_color, black);
+    const bool special_eta_text = std::strcmp(model.bus_text, "PCH") == 0 ||
+                                  std::strcmp(model.bus_text, "QUAI") == 0;
+    const bool blink_on = special_eta_text && (((millis() / 500) & 1) == 0);
+    d->setTextColor(blink_on ? white : eta_color, black);
     int16_t ex1 = 0;
     int16_t ey1 = 0;
     uint16_t ew = 0;
@@ -249,7 +260,7 @@ void Hub75MatrixPortal::draw_ui(const UiModel& model)
     (void)ex1;
     (void)ey1;
     const int16_t ecx = (int16_t)(bx0 + (bw - (int16_t)ew) / 2);
-    const int16_t eta_y = eta_y_nom - S + y_shift;
+    const int16_t eta_y = eta_y_nom - S + y_shift + 2;
     if (eta_y + (int16_t)eh <= content_h && eta_y >= -2) {
       d->setCursor(ecx, eta_y);
       print_limited(d, model.bus_text, 5);
@@ -267,6 +278,10 @@ void Hub75MatrixPortal::draw_ui(const UiModel& model)
       print_limited(d, folded, NOTIFICATION_TEXT_MAX - 1);
     }
   }
+  const uint16_t indicator_color = model.bus_theoretical
+      ? d->color565(180, 0, 200)
+      : d->color565(0, 200, 80);
+  d->fillRect((int16_t)DISPLAY_TOTAL_WIDTH - 2, full_h - 2, 2, 2, indicator_color);
 }
 
 void Hub75MatrixPortal::clear_screen()

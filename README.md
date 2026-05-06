@@ -89,7 +89,10 @@ IDFM_SLOT_0_MONITORING_REF=STIF:StopPoint:Q:15352:
 IDFM_SLOT_0_LINE_REF=STIF:Line::C00628:
 IDFM_SLOT_0_LINE_CODE=C00628
 IDFM_SLOT_0_LABEL=2225
+IDFM_SLOT_0_PREFER_THEORETICAL=0
 ```
+
+If you want the UI to display the scheduled departure time instead of a minute countdown for a slot, set `IDFM_SLOT_N_PREFER_THEORETICAL=1` for that slot.
 
 Continue with `IDFM_SLOT_1_*`, `IDFM_SLOT_2_*`, and so on. Up to 16 slots are supported by the build script. `.env.example` contains the current local carousel as a commented example.
 

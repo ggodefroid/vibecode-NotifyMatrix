@@ -84,6 +84,8 @@ def main():
         define_string("IDFM_LINE_REF", get("IDFM_LINE_REF", "")),
         define_string("IDFM_LINE_LABEL", get("IDFM_LINE_LABEL", "2225")),
         define_string("IDFM_LINE_CODE", get("IDFM_LINE_CODE", "")),
+        define_string("IDFM_DESTINATION_FILTER", get("IDFM_DESTINATION_FILTER", "")),
+        ("IDFM_PREFER_THEORETICAL", int(get("IDFM_PREFER_THEORETICAL", "0") or "0")),
     ]
 
     try:
@@ -103,6 +105,7 @@ def main():
                 define_string(f"{prefix}LINE_REF", get(f"{prefix}LINE_REF", "")),
                 define_string(f"{prefix}LINE_CODE", get(f"{prefix}LINE_CODE", "")),
                 define_string(f"{prefix}LABEL", get(f"{prefix}LABEL", "")),
+                (f"{prefix}PREFER_THEORETICAL", int(get(f"{prefix}PREFER_THEORETICAL", "0") or "0")),
             ]
         )
 

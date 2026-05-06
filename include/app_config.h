@@ -73,7 +73,7 @@
 #define UI_REFRESH_MS 16
 #endif
 
-// Outside animations, redraw only when the UI changes and no more often than this.
+// Outside animations, redraw no more often than this.
 #ifndef UI_IDLE_REFRESH_MS
 #define UI_IDLE_REFRESH_MS 250
 #endif
@@ -86,7 +86,7 @@
 // After fetching the next carousel slot, keep showing the current slot for this long.
 // The next line is never displayed before its API response is available.
 #ifndef IDFM_HOLD_AFTER_PREFETCH_MS
-#define IDFM_HOLD_AFTER_PREFETCH_MS 3000u
+#define IDFM_HOLD_AFTER_PREFETCH_MS 6000u
 #endif
 
 // On first boot, keep the clock and current line visible before the first blocking IDFM call.
@@ -109,6 +109,12 @@
 #endif
 #ifndef IDFM_LINE_CODE
 #define IDFM_LINE_CODE ""
+#endif
+#ifndef IDFM_DESTINATION_FILTER
+#define IDFM_DESTINATION_FILTER ""
+#endif
+#ifndef IDFM_PREFER_THEORETICAL
+#define IDFM_PREFER_THEORETICAL 0
 #endif
 #ifndef IDFM_SLOT_COUNT
 #define IDFM_SLOT_COUNT 0
