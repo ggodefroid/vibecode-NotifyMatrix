@@ -20,11 +20,6 @@ public:
   // Draw text through Adafruit_GFX using the default bitmap font.
   void draw_hello_world();
   void draw_ui(const UiModel& model);
-  /// Redessine uniquement la zone bus (clignotement QUAI/PCH sans effacer l'horloge).
-  void refresh_bus_eta_blink(const UiModel& model);
-
-  /// Compact setup hint (mode config Wi‑Fi), not the large clock font.
-  void draw_setup_screen(const char* line1, const char* line2, const char* line3);
 
   void clear_screen();
   void set_brightness8(uint8_t value);
