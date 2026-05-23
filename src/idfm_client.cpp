@@ -1,5 +1,7 @@
 #include "idfm_client.h"
 
+#include "runtime_config.h"
+
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <HTTPClient.h>
@@ -199,28 +201,14 @@ static bool iso8601_to_hhmm(const char* iso, char* out, size_t out_size)
   return true;
 }
 
-bool find_time_value(JsonObject call,
-                     bool prefer_theoretical,
-                     const char*& out_iso,
-                     time_t& out_epoch)
+static bool find_time_value_order(JsonObject call,
+                                   const char* const* keys,
+                                   size_t key_count,
+                                   const char*& out_iso,
+                                   time_t& out_epoch)
 {
-  static const char* const kTheoreticalOrder[] = {"AimedDepartureTime",
-                                                   "AimedArrivalTime",
-                                                   "ExpectedDepartureTime",
-                                                   "ExpectedArrivalTime",
-                                                   "ActualDepartureTime",
-                                                   "ActualArrivalTime"};
-  static const char* const kRealtimeOrder[] = {"ExpectedDepartureTime",
-                                                "ExpectedArrivalTime",
-                                                "AimedDepartureTime",
-                                                "AimedArrivalTime",
-                                                "ActualDepartureTime",
-                                                "ActualArrivalTime"};
-  const char* const* order = prefer_theoretical ? kTheoreticalOrder : kRealtimeOrder;
-  const size_t order_len = prefer_theoretical ? sizeof(kTheoreticalOrder) / sizeof(kTheoreticalOrder[0])
-                                             : sizeof(kRealtimeOrder) / sizeof(kRealtimeOrder[0]);
-  for (size_t i = 0; i < order_len; ++i) {
-    const char* s = siri_datetime_string(call[order[i]]);
+  for (size_t i = 0; i < key_count; ++i) {
+    const char* s = siri_datetime_string(call[keys[i]]);
     if (s == nullptr || s[0] == '\0') {
       continue;
     }
@@ -232,6 +220,29 @@ bool find_time_value(JsonObject call,
     }
   }
   return false;
+}
+
+bool find_time_value(JsonObject call,
+                     bool prefer_theoretical,
+                     const char*& out_iso,
+                     time_t& out_epoch)
+{
+  static const char* const kTheoreticalOrder[] = {"AimedDepartureTime",
+                                                   "AimedArrivalTime"};
+  static const char* const kRealtimeOrder[] = {"ExpectedDepartureTime",
+                                                "ExpectedArrivalTime",
+                                                "ActualDepartureTime",
+                                                "ActualArrivalTime"};
+  if (prefer_theoretical) {
+    if (find_time_value_order(call, kTheoreticalOrder, sizeof(kTheoreticalOrder) / sizeof(kTheoreticalOrder[0]), out_iso, out_epoch)) {
+      return true;
+    }
+    return find_time_value_order(call, kRealtimeOrder, sizeof(kRealtimeOrder) / sizeof(kRealtimeOrder[0]), out_iso, out_epoch);
+  }
+  if (find_time_value_order(call, kRealtimeOrder, sizeof(kRealtimeOrder) / sizeof(kRealtimeOrder[0]), out_iso, out_epoch)) {
+    return true;
+  }
+  return find_time_value_order(call, kTheoreticalOrder, sizeof(kTheoreticalOrder) / sizeof(kTheoreticalOrder[0]), out_iso, out_epoch);
 }
 
 /// PRIM LineRef can be either a direct string or an object like {"value": "STIF:..."}.
@@ -327,7 +338,14 @@ static bool destination_filter_matches(const char* dest, const char* destination
         case_insensitive_contains(dest, "gare de l est") ||
         case_insensitive_contains(dest, "gde") ||
         case_insensitive_contains(dest, "paris est") ||
-        case_insensitive_contains(dest, "paris-est")) {
+        case_insensitive_contains(dest, "paris-est") ||
+        case_insensitive_contains(dest, "paris gare de l") ||
+        case_insensitive_contains(dest, "direction paris est") ||
+        case_insensitive_contains(dest, "vers paris est")) {
+      return true;
+    }
+    if (case_insensitive_contains(dest, "est") &&
+        (case_insensitive_contains(dest, "paris") || case_insensitive_contains(dest, "gare"))) {
       return true;
     }
   }
@@ -370,11 +388,38 @@ bool line_label_matches_stif_line_ref(const char* lr, const char* label)
   return false;
 }
 
+static bool label_is_bus_p(const char* label)
+{
+  if (label == nullptr || label[0] == '\0') {
+    return false;
+  }
+  return case_insensitive_contains(label, "BUS P") || case_insensitive_contains(label, "BUSP");
+}
+
+static bool label_is_train_p_only(const char* label)
+{
+  if (label == nullptr || label[0] == '\0') {
+    return false;
+  }
+  return std::strcmp(label, "P") == 0;
+}
+
 static bool should_apply_destination_filter(const char* line_label_for_pub,
+                                             const char* line_code_substr,
                                              const char* destination_filter)
 {
-  return destination_filter != nullptr && destination_filter[0] != '\0' &&
-         line_label_for_pub != nullptr && std::strcmp(line_label_for_pub, "P") == 0;
+  if (destination_filter == nullptr || destination_filter[0] == '\0') {
+    return false;
+  }
+  if (line_code_substr != nullptr && line_code_substr[0] != '\0') {
+    if (std::strcmp(line_code_substr, "C01730") == 0 || std::strcmp(line_code_substr, "C01841") == 0) {
+      return true;
+    }
+  }
+  if (label_is_train_p_only(line_label_for_pub) || label_is_bus_p(line_label_for_pub)) {
+    return true;
+  }
+  return false;
 }
 
 bool journey_matches_line_filter(JsonObject journey,
@@ -392,7 +437,7 @@ bool journey_matches_line_filter(JsonObject journey,
   if (has_ref && lr[0] != '\0') {
     if (std::strcmp(lr, line_ref) == 0 ||
         (std::strlen(line_ref) >= 5 && std::strstr(lr, line_ref) != nullptr)) {
-      if (should_apply_destination_filter(line_label_for_pub, destination_filter)) {
+      if (should_apply_destination_filter(line_label_for_pub, line_code_substr, destination_filter)) {
         const char* dest = journey_destination_cstr(journey);
         return destination_filter_matches(dest, destination_filter);
       }
@@ -405,7 +450,7 @@ bool journey_matches_line_filter(JsonObject journey,
     if (lr[0] == '\0' || std::strstr(lr, line_code_substr) == nullptr) {
       return false;
     }
-    if (should_apply_destination_filter(line_label_for_pub, destination_filter)) {
+    if (should_apply_destination_filter(line_label_for_pub, line_code_substr, destination_filter)) {
       const char* dest = journey_destination_cstr(journey);
       return destination_filter_matches(dest, destination_filter);
     }
@@ -418,7 +463,7 @@ bool journey_matches_line_filter(JsonObject journey,
     if (lr[0] == '\0' || std::strstr(lr, line_code_substr) == nullptr) {
       return false;
     }
-    if (should_apply_destination_filter(line_label_for_pub, destination_filter)) {
+    if (should_apply_destination_filter(line_label_for_pub, line_code_substr, destination_filter)) {
       const char* dest = journey_destination_cstr(journey);
       return destination_filter_matches(dest, destination_filter);
     }
@@ -428,14 +473,14 @@ bool journey_matches_line_filter(JsonObject journey,
   if (has_label) {
     const char* pub = first_string(journey["PublishedLineName"]);
     if (pub != nullptr && pub[0] != '\0' && std::strstr(pub, line_label_for_pub) != nullptr) {
-      if (should_apply_destination_filter(line_label_for_pub, destination_filter)) {
+      if (should_apply_destination_filter(line_label_for_pub, line_code_substr, destination_filter)) {
         const char* dest = journey_destination_cstr(journey);
         return destination_filter_matches(dest, destination_filter);
       }
       return true;
     }
     if (line_label_matches_stif_line_ref(lr, line_label_for_pub)) {
-      if (should_apply_destination_filter(line_label_for_pub, destination_filter)) {
+      if (should_apply_destination_filter(line_label_for_pub, line_code_substr, destination_filter)) {
         const char* dest = journey_destination_cstr(journey);
         return destination_filter_matches(dest, destination_filter);
       }
@@ -445,11 +490,11 @@ bool journey_matches_line_filter(JsonObject journey,
   }
 
   if (destination_filter != nullptr && destination_filter[0] != '\0') {
-    if (should_apply_destination_filter(line_label_for_pub, destination_filter)) {
+    if (should_apply_destination_filter(line_label_for_pub, line_code_substr, destination_filter)) {
       const char* dest = journey_destination_cstr(journey);
       return destination_filter_matches(dest, destination_filter);
     }
-    return true;
+    return false;
   }
 
   return !has_ref;
@@ -474,11 +519,13 @@ void idfm_consider_one_visit(JsonObject visit,
   if (journey.isNull()) {
     return;
   }
+  const char* filter_label =
+      (line_code_substr != nullptr && line_code_substr[0] != '\0') ? line_code_substr : fallback_line_label;
   if (!journey_matches_line_filter(journey,
                                      line_ref,
                                      line_code_substr,
-                                     fallback_line_label,
-                                     IDFM_DESTINATION_FILTER)) {
+                                     filter_label,
+                                     cfg_idfm_destination_filter())) {
     skipped_line++;
     return;
   }
@@ -526,7 +573,7 @@ void set_error(IdfmResult& result, const char* text, int http_code = 0)
   result.ok = false;
   result.minutes = -1;
   result.http_code = http_code;
-  copy_cstr(result.text, sizeof(result.text), "ERR");
+  copy_cstr(result.text, sizeof(result.text), "--");
   copy_cstr(result.error, sizeof(result.error), text);
 }
 
@@ -566,6 +613,30 @@ static void idfm_serial_print_hex(const char* prefix, const char* data, size_t l
   Serial.println();
 }
 
+static bool idfm_cstr_is_printable_ascii(const char* s, size_t len)
+{
+  for (size_t i = 0; i < len; ++i) {
+    const unsigned char c = static_cast<unsigned char>(s[i]);
+    if (c < 0x20 || c > 0x7E) {
+      return false;
+    }
+  }
+  return true;
+}
+
+static void idfm_log_cstr_bytes_if_invalid(const char* label, const char* s, size_t len)
+{
+  if (s == nullptr || len == 0) {
+    return;
+  }
+  if (len == kIdfmUriEncodeMaxInput || !idfm_cstr_is_printable_ascii(s, len)) {
+    Serial.printf("[IDFM] WARN %s contains unusual bytes or is too long len=%u\n",
+                  label,
+                  (unsigned)len);
+    idfm_serial_print_hex("[IDFM] raw bytes: ", s, len < 48 ? len : 48);
+  }
+}
+
 /// Log that an API key exists without printing it in full.
 void idfm_log_api_key_meta(const char* api_key)
 {
@@ -585,21 +656,16 @@ void idfm_log_api_key_meta(const char* api_key)
 }
 
 /// Print a long string, such as a URL, in chunks to avoid Serial.printf buffer issues.
-void idfm_serial_print_cstr_chunks(const char* label, const char* s)
+void idfm_serial_print_cstr_chunks(const char* label, const char* s, size_t len)
 {
   Serial.print(label);
   if (s == nullptr) {
     Serial.println("(null)");
     return;
   }
-  for (size_t i = 0; s[i] != '\0'; i += 120) {
-    char piece[121];
-    size_t j = 0;
-    for (; j < 120 && s[i + j] != '\0'; j++) {
-      piece[j] = s[i + j];
-    }
-    piece[j] = '\0';
-    Serial.print(piece);
+  for (size_t i = 0; i < len; i += 120) {
+    const size_t chunk_len = (len - i) > 120 ? 120 : (len - i);
+    Serial.write(reinterpret_cast<const uint8_t*>(s + i), chunk_len);
   }
   Serial.println();
 }
@@ -624,7 +690,252 @@ JsonObject idfm_get_stop_monitoring_delivery(JsonVariant smd)
   return JsonObject();
 }
 
+JsonObject idfm_get_general_message_delivery(JsonVariant gmd)
+{
+  if (gmd.isNull()) {
+    return JsonObject();
+  }
+  if (gmd.is<JsonArray>()) {
+    JsonArray arr = gmd.as<JsonArray>();
+    if (arr.size() == 0) {
+      return JsonObject();
+    }
+    return arr[0].as<JsonObject>();
+  }
+  if (gmd.is<JsonObject>()) {
+    return gmd.as<JsonObject>();
+  }
+  return JsonObject();
+}
+
+bool info_message_still_active(JsonObject msg, time_t now)
+{
+  if (msg.isNull()) {
+    return false;
+  }
+
+  JsonVariant vp = msg["ValidityPeriod"];
+  if (vp.is<JsonObject>()) {
+    JsonObject period = vp.as<JsonObject>();
+    const char* end = siri_datetime_string(period["EndTime"]);
+    if (end != nullptr && end[0] != '\0') {
+      time_t epoch = 0;
+      if (parse_iso8601_epoch(end, epoch) && epoch <= now) {
+        return false;
+      }
+    }
+    const char* start = siri_datetime_string(period["StartTime"]);
+    if (start != nullptr && start[0] != '\0') {
+      time_t epoch = 0;
+      if (parse_iso8601_epoch(start, epoch) && epoch > now) {
+        return false;
+      }
+    }
+  }
+
+  JsonVariant pub = msg["PublicationWindow"];
+  if (pub.is<JsonObject>()) {
+    JsonObject window = pub.as<JsonObject>();
+    const char* end = siri_datetime_string(window["EndTime"]);
+    if (end != nullptr && end[0] != '\0') {
+      time_t epoch = 0;
+      if (parse_iso8601_epoch(end, epoch) && epoch <= now) {
+        return false;
+      }
+    }
+  }
+
+  const char* valid_until = siri_datetime_string(msg["ValidUntil"]);
+  if (valid_until != nullptr && valid_until[0] != '\0') {
+    time_t epoch = 0;
+    if (parse_iso8601_epoch(valid_until, epoch) && epoch <= now) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+unsigned count_active_info_messages(JsonVariant info_msg, time_t now)
+{
+  if (info_msg.isNull()) {
+    return 0;
+  }
+  unsigned count = 0;
+  if (info_msg.is<JsonArray>()) {
+    for (JsonObject msg : info_msg.as<JsonArray>()) {
+      if (info_message_still_active(msg, now)) {
+        count++;
+      }
+    }
+    return count;
+  }
+  if (info_msg.is<JsonObject>()) {
+    return info_message_still_active(info_msg.as<JsonObject>(), now) ? 1u : 0u;
+  }
+  return 0;
+}
+
+struct DisruptionCacheEntry {
+  char line_ref[kIdfmUriEncodeMaxInput + 1] = "";
+  bool disrupted = false;
+  uint32_t cached_at_ms = 0;
+  bool valid = false;
+};
+
+DisruptionCacheEntry g_disruption_cache;
+
+static constexpr const char* kPrimHost = "prim.iledefrance-mobilites.fr";
+static constexpr uint16_t kPrimPort = 443;
+static constexpr uint32_t kPrimHttpTimeoutMs = 15000u;
+
+/// GET HTTPS PRIM — même schéma que le projet « dossier 1 » (host + port + path).
+static bool idfm_prim_http_get_body(const char* api_key,
+                                    const String& uri,
+                                    String& response_body,
+                                    int& http_code_out)
+{
+  http_code_out = 0;
+  response_body = "";
+  if (!is_configured(api_key)) {
+    return false;
+  }
+
+  WiFiClientSecure secure_client;
+  secure_client.setInsecure();
+
+  HTTPClient http;
+  http.setTimeout(kPrimHttpTimeoutMs);
+  if (!http.begin(secure_client, kPrimHost, kPrimPort, uri.c_str(), true)) {
+    Serial.printf("[IDFM] FAIL http_begin(host, uri) WiFi_status=%d heap=%u\n",
+                  (int)WiFi.status(),
+                  (unsigned)ESP.getFreeHeap());
+    return false;
+  }
+
+  http.addHeader("accept", "application/json");
+  http.addHeader("apikey", api_key);
+  http_code_out = http.GET();
+  yield();
+
+  if (http_code_out != HTTP_CODE_OK) {
+    const String err_body = http.getString();
+    Serial.printf("[IDFM] FAIL http_status=%d (%s) heap=%u\n",
+                  http_code_out,
+                  HTTPClient::errorToString(http_code_out).c_str(),
+                  (unsigned)ESP.getFreeHeap());
+    if (err_body.length() > 0) {
+      idfm_serial_trunc("[IDFM] HTTP error body: ", err_body.c_str(), 400);
+    }
+    http.end();
+    return false;
+  }
+
+  response_body = http.getString();
+  http.end();
+  yield();
+  return response_body.length() > 0;
+}
+
+bool prim_http_get_json(const char* api_key, const String& uri, JsonDocument& doc, int& http_code_out)
+{
+  String response_body;
+  if (!idfm_prim_http_get_body(api_key, uri, response_body, http_code_out)) {
+    return false;
+  }
+
+  constexpr uint8_t kJsonNestingLimit = 30;
+  const DeserializationError error = deserializeJson(
+      doc, response_body, DeserializationOption::NestingLimit(kJsonNestingLimit));
+  return !error;
+}
+
+bool idfm_line_has_disruption_impl(const char* api_key, const char* line_ref, bool& out_disrupted)
+{
+  out_disrupted = false;
+
+  if (!is_configured(api_key) || line_ref == nullptr || line_ref[0] == '\0') {
+    return false;
+  }
+
+  if (time(nullptr) < 1700000000) {
+    return false;
+  }
+
+  const uint32_t now_ms = millis();
+  if (g_disruption_cache.valid && std::strcmp(g_disruption_cache.line_ref, line_ref) == 0 &&
+      now_ms - g_disruption_cache.cached_at_ms < (uint32_t)IDFM_DISRUPTION_CACHE_MS) {
+    out_disrupted = g_disruption_cache.disrupted;
+    return true;
+  }
+
+  String uri = "/marketplace/general-message?LineRef=";
+  uri += idfm_uri_encode_component(line_ref);
+  uri += "&InfoChannelRef=Perturbation";
+
+#if IDFM_LOG_REDUCE == 0
+  Serial.println(F("[IDFM] GET general-message (Perturbation)"));
+  idfm_serial_print_cstr_chunks("[IDFM] URL: ", (String("https://prim.iledefrance-mobilites.fr") + uri).c_str(),
+                                uri.length() + 40);
+#endif
+
+  JsonDocument doc;
+  int http_code = 0;
+  if (!prim_http_get_json(api_key, uri, doc, http_code)) {
+#if IDFM_LOG_REDUCE == 0
+    Serial.printf("[IDFM] disruption check failed http=%d\n", http_code);
+#endif
+    return false;
+  }
+
+  JsonObject delivery = idfm_get_general_message_delivery(
+      doc["Siri"]["ServiceDelivery"]["GeneralMessageDelivery"]);
+  if (delivery.isNull()) {
+    out_disrupted = false;
+  } else if (delivery["ErrorCondition"].is<JsonObject>()) {
+    out_disrupted = false;
+  } else {
+    const time_t now = time(nullptr);
+    const unsigned active = count_active_info_messages(delivery["InfoMessage"], now);
+    out_disrupted = active > 0;
+  }
+
+  copy_cstr(g_disruption_cache.line_ref, sizeof(g_disruption_cache.line_ref), line_ref);
+  g_disruption_cache.disrupted = out_disrupted;
+  g_disruption_cache.cached_at_ms = now_ms;
+  g_disruption_cache.valid = true;
+
+  Serial.printf("[IDFM] disruption line_ref=%.24s active=%d\n",
+                line_ref,
+                out_disrupted ? 1 : 0);
+  return true;
+}
+
 } // namespace
+
+void idfm_prim_invalidate_dns()
+{
+}
+
+bool idfm_line_has_disruption(const char* api_key, const char* line_ref, bool& out_disrupted)
+{
+  return idfm_line_has_disruption_impl(api_key, line_ref, out_disrupted);
+}
+
+bool idfm_disruption_from_cache(const char* line_ref, bool& out_disrupted)
+{
+  out_disrupted = false;
+  if (line_ref == nullptr || line_ref[0] == '\0') {
+    return false;
+  }
+  const uint32_t now_ms = millis();
+  if (g_disruption_cache.valid && std::strcmp(g_disruption_cache.line_ref, line_ref) == 0 &&
+      now_ms - g_disruption_cache.cached_at_ms < (uint32_t)IDFM_DISRUPTION_CACHE_MS) {
+    out_disrupted = g_disruption_cache.disrupted;
+    return true;
+  }
+  return false;
+}
 
 bool idfm_fetch_next_departure(const char* api_key,
                                const char* monitoring_ref,
@@ -648,14 +959,14 @@ bool idfm_fetch_next_departure(const char* api_key,
                   is_configured(api_key) ? 1 : 0,
                   is_configured(monitoring_ref) ? 1 : 0);
     set_error(result, "missing config");
-    copy_cstr(result.text, sizeof(result.text), "+1h");
+    copy_cstr(result.text, sizeof(result.text), "--");
     return false;
   }
 
   if (time(nullptr) < 1700000000) {
     Serial.printf("[IDFM] FAIL time_not_synced epoch=%lld\n", (long long)time(nullptr));
     set_error(result, "time not synced");
-    copy_cstr(result.text, sizeof(result.text), "+1h");
+    copy_cstr(result.text, sizeof(result.text), "--");
     return false;
   }
 
@@ -669,168 +980,16 @@ bool idfm_fetch_next_departure(const char* api_key,
   Serial.printf("[IDFM] ref len=%u line_ref len=%u\n",
                 (unsigned)monitoring_ref_len,
                 (unsigned)line_ref_len);
-  if (line_ref_len == kIdfmUriEncodeMaxInput) {
-    Serial.println(F("[IDFM] WARN line_ref appears too long or unterminated"));
-    idfm_serial_print_hex("[IDFM] line_ref raw bytes: ", line_ref, 16);
-  }
+  idfm_log_cstr_bytes_if_invalid("monitoring_ref", monitoring_ref, monitoring_ref_len);
+  idfm_log_cstr_bytes_if_invalid("line_ref", line_ref, line_ref_len);
 
-  String uri = "/marketplace/stop-monitoring?MonitoringRef=";
-  uri += idfm_uri_encode_component(monitoring_ref);
-  if (line_ref != nullptr && line_ref[0] != '\0') {
-    uri += "&LineRef=";
-    uri += idfm_uri_encode_component(line_ref, kIdfmUriEncodeMaxInput);
-  }
-  String log_url = String("https://prim.iledefrance-mobilites.fr") + uri;
-
-  Serial.println();
-  Serial.println(F("[IDFM] ========== PRIM API CALL =========="));
-  Serial.println(F("[IDFM] service: GET https://prim.iledefrance-mobilites.fr/marketplace/stop-monitoring"));
-  Serial.println(F("[IDFM] format: JSON (SIRI Lite), Accept header: application/json"));
-  Serial.println(F("[IDFM] TLS: WiFiClientSecure + setInsecure() (no certificate pinning)"));
-  Serial.printf("[IDFM] HTTPClient timeout=%u ms | heap before request=%u\n",
-                15000u,
-                (unsigned)ESP.getFreeHeap());
-  Serial.printf("[IDFM] WiFi: status=%d (3=WL_CONNECTED) RSSI=%d dBm\n",
-                (int)WiFi.status(),
-                (int)WiFi.RSSI());
-  idfm_log_api_key_meta(api_key);
-  idfm_serial_print_cstr_chunks("[IDFM] URL (encoded MonitoringRef + LineRef): ", log_url.c_str());
-  Serial.printf("[IDFM] service host=%s port=443\n", "prim.iledefrance-mobilites.fr");
-  Serial.printf("[IDFM] URL length=%u chars\n", (unsigned)log_url.length());
-
-  WiFiClientSecure secure_client;
-  secure_client.setInsecure();
-
-  HTTPClient http;
-  http.setTimeout(15000);
-  if (!http.begin(secure_client,
-                  "prim.iledefrance-mobilites.fr",
-                  443,
-                  uri.c_str(),
-                  true)) {
-    Serial.printf("[IDFM] FAIL http_begin(host, uri) WiFi_status=%d heap=%u\n",
-                  (int)WiFi.status(),
-                  (unsigned)ESP.getFreeHeap());
-    Serial.println(F("[IDFM] ========== END CALL (http_begin failed) =========="));
-    set_error(result, "http begin");
-    return false;
-  }
-
-  http.addHeader("accept", "application/json");
-  http.addHeader("apikey", api_key);
-  Serial.println(F("[IDFM] sending GET..."));
-  Serial.println(F("[IDFM] calling http.GET()"));
-
-  const int http_code = http.GET();
-  result.http_code = http_code;
-  Serial.printf("[IDFM] http.GET returned %d (%s)\n",
-                http_code,
-                http.errorToString(http_code).c_str());
-  Serial.printf("[IDFM] line response: HTTP %d (200=OK) dt=%lu ms heap=%u\n",
-                http_code,
-                (unsigned long)(millis() - t_start_ms),
-                (unsigned)ESP.getFreeHeap());
-  if (http_code != HTTP_CODE_OK) {
-    const String err_body = http.getString();
-    Serial.printf("[IDFM] FAIL http_status=%d heap=%u dt=%lums\n",
-                  http_code,
-                  (unsigned)ESP.getFreeHeap(),
-                  (unsigned long)(millis() - t_start_ms));
-    idfm_serial_trunc("[IDFM] HTTP error body (start): ", err_body.c_str(), 400);
-    http.end();
-    Serial.println(F("[IDFM] ========== END CALL (HTTP failure) =========="));
-    set_error(result, "http error", http_code);
-    return false;
-  }
-
-  // Read the whole JSON body into RAM. Parsing directly from getStream() over TLS can be
-  // incomplete on ESP32. Stop-monitoring responses stay small when IDFM_LINE_REF is set.
-  const String response_body = http.getString();
-  http.end();
-  Serial.printf("[IDFM] body read: %u bytes | heap=%u | dt=%lu ms\n",
-                (unsigned)response_body.length(),
-                (unsigned)ESP.getFreeHeap(),
-                (unsigned long)(millis() - t_start_ms));
-  if (response_body.length() == 0) {
-    Serial.printf("[IDFM] FAIL empty_response_body heap=%u dt=%lums\n",
-                  (unsigned)ESP.getFreeHeap(),
-                  (unsigned long)(millis() - t_start_ms));
-    Serial.println(F("[IDFM] ========== END CALL (empty body) =========="));
-    set_error(result, "empty body", http_code);
-    return false;
-  }
-
-  idfm_serial_trunc("[IDFM] JSON body (start): ", response_body.c_str(), 400);
-
-  JsonDocument filter;
-  // Keep the whole delivery block. If StopMonitoringDelivery is an object, a [0] filter
-  // would remove MonitoredStopVisit and make the parser see null.
-  filter["Siri"]["ServiceDelivery"]["StopMonitoringDelivery"] = true;
-
+  const bool want_line_in_url = line_ref != nullptr && line_ref[0] != '\0';
+  const uint8_t pass_count = want_line_in_url ? 2u : 1u;
+  String response_body;
+  int http_code = 0;
   JsonDocument doc;
-  // PRIM/SIRI JSON can exceed ArduinoJson's default nesting limit.
-  constexpr uint8_t kJsonNestingLimit = 30;
-  DeserializationError error = deserializeJson(
-      doc,
-      response_body,
-      DeserializationOption::Filter(filter),
-      DeserializationOption::NestingLimit(kJsonNestingLimit));
-  if (error) {
-    Serial.printf("[IDFM] FAIL json_deserialize code=%s ec=%u nesting_limit=%u heap=%u dt=%lums\n",
-                  error.c_str(),
-                  (unsigned)error.code(),
-                  (unsigned)kJsonNestingLimit,
-                  (unsigned)ESP.getFreeHeap(),
-                  (unsigned long)(millis() - t_start_ms));
-    idfm_serial_trunc("[IDFM] body replay for parse debug: ", response_body.c_str(), 400);
-    Serial.println(F("[IDFM] ========== END CALL (JSON parse failed) =========="));
-    set_error(result, "json error", http_code);
-    return false;
-  }
-
-  JsonObject delivery = idfm_get_stop_monitoring_delivery(
-      doc["Siri"]["ServiceDelivery"]["StopMonitoringDelivery"]);
-  if (delivery.isNull()) {
-    Serial.printf("[IDFM] FAIL stop_monitoring_delivery missing/empty heap=%u dt=%lums\n",
-                  (unsigned)ESP.getFreeHeap(),
-                  (unsigned long)(millis() - t_start_ms));
-    Serial.println(F("[IDFM] ========== END CALL (no JSON delivery) =========="));
-    set_error(result, "no delivery", http_code);
-    copy_cstr(result.text, sizeof(result.text), "+1h");
-    return false;
-  }
-  if (delivery["ErrorCondition"].is<JsonObject>()) {
-    JsonObject errInf = delivery["ErrorCondition"]["ErrorInformation"].as<JsonObject>();
-    const char* msg = errInf["ErrorText"].as<const char*>();
-    if (msg == nullptr || msg[0] == '\0') {
-      msg = errInf["ErrorDescription"].as<const char*>();
-    }
-    if (msg == nullptr) {
-      msg = "PRIM ErrorCondition";
-    }
-    Serial.printf("[IDFM] FAIL api_error_condition: %s (heap=%u)\n",
-                  msg,
-                  (unsigned)ESP.getFreeHeap());
-    Serial.println(F("[IDFM] ========== END CALL (PRIM ErrorCondition) =========="));
-    result.ok = false;
-    result.http_code = http_code;
-    copy_cstr(result.error, sizeof(result.error), msg);
-    copy_cstr(result.text, sizeof(result.text), "+1h");
-    return false;
-  }
-
-  JsonVariant msv = delivery["MonitoredStopVisit"];
-  if (msv.isNull()) {
-    Serial.printf("[IDFM] FAIL monitored_stop_visit missing/null heap=%u dt=%lums\n",
-                  (unsigned)ESP.getFreeHeap(),
-                  (unsigned long)(millis() - t_start_ms));
-    Serial.println(F("[IDFM] ========== END CALL (no visits in JSON) =========="));
-    set_error(result, "no visits", http_code);
-    copy_cstr(result.text, sizeof(result.text), "+1h");
-    return false;
-  }
-
-  Serial.println(F("[IDFM] JSON structure OK, analyzing MonitoredStopVisit / lines..."));
+  JsonObject delivery;
+  bool parsed_ok = false;
 
   const time_t now = time(nullptr);
   int best_minutes = 9999;
@@ -842,18 +1001,134 @@ bool idfm_fetch_next_departure(const char* api_key,
   unsigned kept_line = 0;
   size_t visit_count = 0;
 
-  if (msv.is<JsonArray>()) {
-    JsonArray visits = msv.as<JsonArray>();
-    visit_count = visits.size();
-    if (visit_count == 0) {
-      Serial.printf("[IDFM] FAIL visits_empty (array size 0) heap=%u\n", (unsigned)ESP.getFreeHeap());
-      Serial.println(F("[IDFM] ========== END CALL (empty visits list) =========="));
-      set_error(result, "no visits", http_code);
-      copy_cstr(result.text, sizeof(result.text), "+1h");
+  for (uint8_t pass = 0; pass < pass_count; ++pass) {
+    const bool use_line_in_url = want_line_in_url && pass == 0;
+
+    String uri = "/marketplace/stop-monitoring?MonitoringRef=";
+    uri += idfm_uri_encode_component(monitoring_ref);
+    if (use_line_in_url) {
+      uri += "&LineRef=";
+      uri += idfm_uri_encode_component(line_ref, kIdfmUriEncodeMaxInput);
+    }
+    const String log_url = String("https://prim.iledefrance-mobilites.fr") + uri;
+
+    Serial.println();
+    Serial.println(F("[IDFM] ========== PRIM API CALL =========="));
+    Serial.printf("[IDFM] pass=%u line_in_url=%d\n",
+                  (unsigned)(pass + 1),
+                  use_line_in_url ? 1 : 0);
+    idfm_log_api_key_meta(api_key);
+    idfm_serial_print_cstr_chunks("[IDFM] URL: ", log_url.c_str(), log_url.length());
+
+    http_code = 0;
+    if (idfm_prim_http_get_body(api_key, uri, response_body, http_code)) {
+      result.http_code = http_code;
+    } else {
+      result.http_code = http_code;
+      set_error(result, "http error", http_code);
       return false;
     }
-    for (JsonObject visit : visits) {
-      idfm_consider_one_visit(visit,
+
+    if (response_body.length() == 0) {
+      set_error(result, "empty body", http_code);
+      return false;
+    }
+
+    doc.clear();
+    JsonDocument filter;
+    filter["Siri"]["ServiceDelivery"]["StopMonitoringDelivery"] = true;
+    constexpr uint8_t kJsonNestingLimit = 30;
+    const DeserializationError error = deserializeJson(
+        doc,
+        response_body,
+        DeserializationOption::Filter(filter),
+        DeserializationOption::NestingLimit(kJsonNestingLimit));
+    if (error) {
+      set_error(result, "json error", http_code);
+      return false;
+    }
+
+    delivery = idfm_get_stop_monitoring_delivery(doc["Siri"]["ServiceDelivery"]["StopMonitoringDelivery"]);
+    if (delivery.isNull()) {
+      set_error(result, "no delivery", http_code);
+      copy_cstr(result.text, sizeof(result.text), "--");
+      return false;
+    }
+
+    if (delivery["ErrorCondition"].is<JsonObject>()) {
+      JsonObject errInf = delivery["ErrorCondition"]["ErrorInformation"].as<JsonObject>();
+      const char* msg = errInf["ErrorText"].as<const char*>();
+      if (msg == nullptr || msg[0] == '\0') {
+        msg = errInf["ErrorDescription"].as<const char*>();
+      }
+      if (msg == nullptr) {
+        msg = "PRIM ErrorCondition";
+      }
+      Serial.printf("[IDFM] api_error_condition: %s\n", msg);
+
+      if (use_line_in_url && msg != nullptr && std::strstr(msg, "couple") != nullptr) {
+        Serial.println(F("[IDFM] retry without LineRef (invalid couple)"));
+        continue;
+      }
+
+      result.ok = false;
+      copy_cstr(result.error, sizeof(result.error), msg);
+      copy_cstr(result.text, sizeof(result.text), "--");
+      return false;
+    }
+
+    Serial.println(F("[IDFM] JSON structure OK, analyzing MonitoredStopVisit / lines..."));
+
+    best_minutes = 9999;
+    best_label = fallback_line_label;
+    best_departure_iso = nullptr;
+    skipped_line = 0;
+    skipped_bad_iso = 0;
+    skipped_past = 0;
+    kept_line = 0;
+    visit_count = 0;
+
+    JsonVariant msv = delivery["MonitoredStopVisit"];
+    if (msv.isNull()) {
+      if (use_line_in_url && pass + 1 < pass_count) {
+        Serial.println(F("[IDFM] retry without LineRef (no MonitoredStopVisit)"));
+        continue;
+      }
+      set_error(result, "no visits", http_code);
+      copy_cstr(result.text, sizeof(result.text), "--");
+      return false;
+    }
+
+    if (msv.is<JsonArray>()) {
+      JsonArray visits = msv.as<JsonArray>();
+      visit_count = visits.size();
+      if (visit_count == 0) {
+        if (use_line_in_url && pass + 1 < pass_count) {
+          Serial.println(F("[IDFM] retry without LineRef (visits_empty)"));
+          continue;
+        }
+        set_error(result, "no visits", http_code);
+        copy_cstr(result.text, sizeof(result.text), "--");
+        return false;
+      }
+      for (JsonObject visit : visits) {
+        idfm_consider_one_visit(visit,
+                                line_ref,
+                                line_code_substr,
+                                fallback_line_label,
+                                prefer_theoretical,
+                                now,
+                                best_minutes,
+                                best_label,
+                                best_departure_iso,
+                                skipped_line,
+                                skipped_bad_iso,
+                                skipped_past,
+                                kept_line);
+      }
+    } else if (msv.is<JsonObject>()) {
+      visit_count = 1;
+      idfm_consider_one_visit(msv.as<JsonObject>(),
                               line_ref,
                               line_code_substr,
                               fallback_line_label,
@@ -866,32 +1141,27 @@ bool idfm_fetch_next_departure(const char* api_key,
                               skipped_bad_iso,
                               skipped_past,
                               kept_line);
+    } else {
+      set_error(result, "no visits", http_code);
+      copy_cstr(result.text, sizeof(result.text), "--");
+      return false;
     }
-  } else if (msv.is<JsonObject>()) {
-    visit_count = 1;
-    idfm_consider_one_visit(msv.as<JsonObject>(),
-                            line_ref,
-                            line_code_substr,
-                            fallback_line_label,
-                            prefer_theoretical,
-                            now,
-                            best_minutes,
-                            best_label,
-                            best_departure_iso,
-                            skipped_line,
-                            skipped_bad_iso,
-                            skipped_past,
-                            kept_line);
-  } else {
-    Serial.printf("[IDFM] FAIL monitored_stop_visit unexpected type heap=%u\n",
-                  (unsigned)ESP.getFreeHeap());
-    Serial.println(F("[IDFM] ========== END CALL (unknown MonitoredStopVisit type) =========="));
-    set_error(result, "no visits", http_code);
-    copy_cstr(result.text, sizeof(result.text), "+1h");
-    return false;
+
+    if (best_minutes == 9999) {
+      if (use_line_in_url && pass + 1 < pass_count) {
+        Serial.printf("[IDFM] retry without LineRef (no_match visits=%u kept=%u skip=%u)\n",
+                      (unsigned)visit_count,
+                      (unsigned)kept_line,
+                      (unsigned)skipped_line);
+        continue;
+      }
+    } else {
+      parsed_ok = true;
+      break;
+    }
   }
 
-  if (best_minutes == 9999) {
+  if (!parsed_ok || best_minutes == 9999) {
     Serial.printf(
         "[IDFM] FAIL no_match visits=%u line_ok=%u line_skip=%u bad_iso=%u past60s=%u "
         "epoch_now=%lld heap=%u dt=%lums\n",
@@ -905,29 +1175,22 @@ bool idfm_fetch_next_departure(const char* api_key,
         (unsigned long)(millis() - t_start_ms));
     Serial.println(F("[IDFM] ========== END CALL (no matching visit after filters) =========="));
     set_error(result, "no match", http_code);
-    copy_cstr(result.text, sizeof(result.text), "+1h");
+    copy_cstr(result.text, sizeof(result.text), "--");
     return false;
   }
 
   result.ok = true;
   result.minutes = best_minutes > 0 ? best_minutes - 1 : 0;
   copy_cstr(result.line, sizeof(result.line), best_label);
-  if (prefer_theoretical && best_departure_iso != nullptr) {
-    if (!iso8601_to_hhmm(best_departure_iso, result.text, sizeof(result.text))) {
-      if (result.minutes == 0 || result.minutes == 1) {
-        copy_cstr(result.text, sizeof(result.text), "QUAI");
-      } else if (result.minutes == 2 || result.minutes == 3) {
-        copy_cstr(result.text, sizeof(result.text), "PCH");
-      } else {
-        snprintf(result.text, sizeof(result.text), "%dm", result.minutes);
-      }
-    }
-  } else if (result.minutes == 0 || result.minutes == 1) {
-    copy_cstr(result.text, sizeof(result.text), "QUAI");
-  } else if (result.minutes == 2 || result.minutes == 3) {
-    copy_cstr(result.text, sizeof(result.text), "PCH");
+  if (prefer_theoretical && best_departure_iso != nullptr &&
+      iso8601_to_hhmm(best_departure_iso, result.text, sizeof(result.text))) {
+    // Horaire théorique affiché tel quel (HH:MM).
   } else {
-    snprintf(result.text, sizeof(result.text), "%dm", result.minutes);
+    cfg_format_bus_eta_text(result.minutes,
+                            prefer_theoretical,
+                            best_departure_iso,
+                            result.text,
+                            sizeof(result.text));
   }
   copy_cstr(result.error, sizeof(result.error), "");
   Serial.printf("[IDFM] OK minutes=%d line=%.20s visits=%u heap=%u dt=%lums\n",
@@ -940,3 +1203,4 @@ bool idfm_fetch_next_departure(const char* api_key,
   Serial.println(F("[IDFM] ========== END CALL (success) =========="));
   return true;
 }
+
