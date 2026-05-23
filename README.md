@@ -36,11 +36,7 @@ The project is configured from one local `.env` file. Secrets and line selection
    cp .env.example .env
    ```
 
-   **First boot (recommended):** power on the panel, join Wi‑Fi `NotifyMatrix-Setup` (password `notifymatrix`), open http://192.168.4.1 and save settings on the device.
-
-   **PC wizard:** open [`web/config/index.html`](web/config/index.html) to generate a `.env` file for compile-time defaults / development.
-
-3. Edit `.env` (if not using the wizard):
+3. Edit `.env`:
 
    - Fill `WIFI_SSID` and `WIFI_PASSWORD`.
    - Set the MQTT broker fields.
@@ -137,7 +133,6 @@ mosquitto_pub -h 192.168.1.10 -t notifymatrix/notify -m "Hello from NotifyMatrix
 | `platformio.ini` | PlatformIO environment, board, libraries, upload behavior |
 | `.env.example` | The only tracked configuration example |
 | `scripts/load_env_config.py` | Reads `.env` and injects build-time macros |
-| `web/config/index.html` | Web wizard for first-time `.env` generation |
 | `include/app_config.h` | Display layout, timings, defaults, and compile-time fallbacks |
 | `src/main.cpp` | WiFi, MQTT, clock, IDFM flow, and main loop |
 | `src/idfm_client.cpp` | PRIM stop-monitoring HTTP client and SIRI JSON parsing |

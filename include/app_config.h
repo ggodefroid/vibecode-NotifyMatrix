@@ -38,7 +38,7 @@
 #endif
 // Scrolling speed from right to left, in pixels per second. Lower is slower.
 #ifndef NOTIFY_SCROLL_PPS
-#define NOTIFY_SCROLL_PPS 40
+#define NOTIFY_SCROLL_PPS 30
 #endif
 
 // Values below are overridden by `.env` through scripts/load_env_config.py.
@@ -68,83 +68,30 @@
 #define MQTT_CLIENT_ID "notifymatrix-s3"
 #endif
 
-// Display refresh period during animations. 16 ms is about 62 FPS.
+// Display refresh period during animations. 16 ms is about 60 FPS.
 #ifndef UI_REFRESH_MS
 #define UI_REFRESH_MS 16
 #endif
 
-// QUAI / PCH label blink half-period in milliseconds.
-#ifndef BUS_ETA_BLINK_MS
-#define BUS_ETA_BLINK_MS 300
-#endif
-
 // Outside animations, redraw no more often than this.
 #ifndef UI_IDLE_REFRESH_MS
-#define UI_IDLE_REFRESH_MS 16
-#endif
-
-// Reduce verbose logging in production (0=verbose, 1=minimal)
-#ifndef IDFM_LOG_REDUCE
-#define IDFM_LOG_REDUCE 1
-#endif
-
-// Display brightness levels.
-#ifndef DISPLAY_BRIGHTNESS_NORMAL
-#define DISPLAY_BRIGHTNESS_NORMAL 28
-#endif
-#ifndef DISPLAY_BRIGHTNESS_DIM
-#define DISPLAY_BRIGHTNESS_DIM 8
+#define UI_IDLE_REFRESH_MS 250
 #endif
 
 // Initial WiFi connection timeout.
 #ifndef WIFI_CONNECT_TIMEOUT_MS
 #define WIFI_CONNECT_TIMEOUT_MS 15000
 #endif
-#ifndef WIFI_IP_WAIT_TIMEOUT_MS
-#define WIFI_IP_WAIT_TIMEOUT_MS 30000
-#endif
 
 // After fetching the next carousel slot, keep showing the current slot for this long.
 // The next line is never displayed before its API response is available.
 #ifndef IDFM_HOLD_AFTER_PREFETCH_MS
-#define IDFM_HOLD_AFTER_PREFETCH_MS 3500u
-#endif
-
-// Dwell when the current carousel slot has no passage (MonitoredStopVisit empty / no match).
-#ifndef IDFM_HOLD_NO_INFO_MS
-#define IDFM_HOLD_NO_INFO_MS 3000u
+#define IDFM_HOLD_AFTER_PREFETCH_MS 6000u
 #endif
 
 // On first boot, keep the clock and current line visible before the first blocking IDFM call.
 #ifndef IDFM_LINE_CHANGE_CLOCK_DWELL_MS
 #define IDFM_LINE_CHANGE_CLOCK_DWELL_MS 1500u
-#endif
-
-// How long to cache PRIM Perturbation status per LineRef (reduces general-message API calls).
-#ifndef IDFM_DISRUPTION_CACHE_MS
-#define IDFM_DISRUPTION_CACHE_MS 300000u
-#endif
-
-// PRIM HTTPS timeouts (ms). Lower = fail faster; 20s is enough for stop-monitoring.
-#ifndef IDFM_PRIM_HTTP_TIMEOUT_MS
-#define IDFM_PRIM_HTTP_TIMEOUT_MS 20000u
-#endif
-#ifndef IDFM_PRIM_CONNECT_TIMEOUT_MS
-#define IDFM_PRIM_CONNECT_TIMEOUT_MS 12000u
-#endif
-#ifndef IDFM_PRIM_HTTP_RETRIES
-#define IDFM_PRIM_HTTP_RETRIES 3u
-#endif
-#ifndef IDFM_PRIM_RETRY_DELAY_MS
-#define IDFM_PRIM_RETRY_DELAY_MS 1200u
-#endif
-
-// First-boot Wi‑Fi access point for the web configuration portal.
-#ifndef CONFIG_PORTAL_AP_SSID
-#define CONFIG_PORTAL_AP_SSID "NotifyMatrix-Setup"
-#endif
-#ifndef CONFIG_PORTAL_AP_PASSWORD
-#define CONFIG_PORTAL_AP_PASSWORD "notifymatrix"
 #endif
 
 // IDFM / PRIM configuration. In carousel mode these are only used as single-line fallbacks.
@@ -175,7 +122,7 @@
 
 // Maximum displayed/received text sizes.
 #ifndef NOTIFICATION_TEXT_MAX
-#define NOTIFICATION_TEXT_MAX 512
+#define NOTIFICATION_TEXT_MAX 64
 #endif
 #ifndef BUS_LABEL_MAX
 #define BUS_LABEL_MAX 12
@@ -202,7 +149,7 @@
 
 // Duration for each boot color-test step. Use 0 to disable the test.
 #ifndef HUB75_SELFTEST_STEP_MS
-#define HUB75_SELFTEST_STEP_MS 1200
+#define HUB75_SELFTEST_STEP_MS 400
 #endif
 
 // Some 64x32 1/16-scan panels do not use the E address line.
