@@ -38,7 +38,7 @@ def parse_env_file(path: str) -> dict:
             line = raw.strip()
             if not line or line.startswith("#"):
                 continue
-            m = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$", line)
+            m = re.match(r"^[ \t]*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$", line)
             if not m:
                 continue
             key, val = m.group(1), m.group(2).strip()
@@ -86,6 +86,8 @@ def main():
         define_string("IDFM_LINE_CODE", get("IDFM_LINE_CODE", "")),
         define_string("IDFM_DESTINATION_FILTER", get("IDFM_DESTINATION_FILTER", "")),
         ("IDFM_PREFER_THEORETICAL", int(get("IDFM_PREFER_THEORETICAL", "0") or "0")),
+        define_int("IDFM_HOLD_AFTER_PREFETCH_MS", get("CAROUSEL_HOLD_MS", "3500"), 3500),
+        define_int("IDFM_HOLD_NO_INFO_MS", get("CAROUSEL_HOLD_NO_INFO_MS", "3000"), 3000),
     ]
 
     try:
